@@ -66,22 +66,32 @@ function saveState(state){
 
 /* Load state from Google Sheets (fetch latest data) */
 async function loadStateFromSheets(){
-  if(!SHEETS_SYNC_URL) return null;
+  if(!SHEETS_SYNC_URL) {
+    console.log('⚠️ SHEETS_SYNC_URL is empty - skipping Sheets load');
+    return null;
+  }
   try {
-    console.log('Loading state from Sheets...');
+    console.log('📥 Loading state from Sheets...');
     const resp = await fetch(SHEETS_SYNC_URL, {mode:'cors'});
     const data = await resp.json();
-    console.log('Sheets response:', data);
+    console.log('📊 Sheets response:', data);
+    
     if(data.ok && data.state) {
-      // Found state in Sheets - merge it with localStorage
+      console.log('✅ State found in Sheets! Keys:', Object.keys(data.state));
       const localState = loadState() || {};
       const mergedState = {...localState, ...data.state};
-      console.log('Merged state from Sheets:', mergedState);
+      console.log('✅ Merged state - userId:', mergedState.userId, 'tasks:', Object.keys(mergedState.tasks || {}).length, 'targets:', Object.keys(mergedState.targets || {}).length);
       saveState(mergedState);
       return mergedState;
+    } else if(data.ok && !data.state) {
+      console.log('⚠️ Sheets is empty (no state saved yet)');
+      return null;
+    } else {
+      console.error('❌ Sheets returned error:', data.error);
+      return null;
     }
   } catch(e) { 
-    console.warn('Could not load from Sheets, using localStorage:', e);
+    console.error('❌ Could not load from Sheets:', e);
   }
   return null;
 }
@@ -91,19 +101,25 @@ async function loadStateFromSheets(){
    Paste the Apps Script "Web app URL" here once deployed.
    Leave empty to disable sync (app works normally without it).
 ============================================================ */
-const SHEETS_SYNC_URL = 'https://script.google.com/macros/s/AKfycbynHu2iuZxE23MNnnGIXDAp0RQUgRJxZz0mc-t-zUeomF1FoQQpoG4geNFx2ktyd636/exec';
+const SHEETS_SYNC_URL = 'https://script.google.com/macros/s/AKfycbweA7MMcaR6l-x3KRWAza7oSRlTnr5qYjSrCrfEE4Xb1m9nnGD9GmfXMjVIrOeCLIKF/exec';
 
 let _syncTimer = null;
 function syncToSheets(state, updatedBy){
-  if(!SHEETS_SYNC_URL) return;
+  if(!SHEETS_SYNC_URL) {
+    console.log('⚠️ SHEETS_SYNC_URL is empty - sync disabled');
+    return;
+  }
   if(_syncTimer) clearTimeout(_syncTimer);
   _syncTimer = setTimeout(() => {
+    console.log('📤 Syncing to Sheets (updated by: ' + updatedBy + ')...');
     fetch(SHEETS_SYNC_URL, {
       method: 'POST',
       mode: 'no-cors',
       headers: {'Content-Type': 'text/plain;charset=utf-8'},
       body: JSON.stringify({ state, updatedBy }),
-    }).catch(err => console.error('sheets sync failed', err));
+    })
+    .then(() => console.log('✅ Sync to Sheets successful!'))
+    .catch(err => console.error('❌ Sheets sync failed:', err));
   }, 2000);
 }
 
