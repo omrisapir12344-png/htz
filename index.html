@@ -1,0 +1,1678 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>htz - מוקד הייטקזון | ניהול</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  body{font-family:'Heebo','Segoe UI',sans-serif;}
+  ::-webkit-scrollbar{width:8px; height:8px;}
+  ::-webkit-scrollbar-thumb{background:#cbd5e1; border-radius:4px;}
+  @media print{
+    .no-print{display:none !important;}
+    body{background:#fff !important;}
+    *{-webkit-print-color-adjust: exact !important; print-color-adjust: exact !important;}
+  }
+  .photo-mode .ui-only{display:none !important;}
+</style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react,env">
+const { useState, useEffect, useRef } = React;
+
+/* ============================================================
+   COLOR TOKENS
+============================================================ */
+const C = {
+  dark:'#1c1c1c',
+  teal:'#22c9bb',
+  tealDark:'#168279',
+  tealLight:'#e1f5f3',
+  orange:'#F2994A',
+  orangeLight:'#FDEBD8',
+  red:'#E2574C',
+  green:'#22A06B',
+};
+
+/* ============================================================
+   UTILITIES
+============================================================ */
+function getGreeting() {
+  const h = new Date().getHours();
+  if(h >= 5 && h < 12) return 'בוקר טוב';
+  if(h >= 12 && h < 18) return 'צהריים טובים';
+  if(h >= 18 && h < 21) return 'ערב טוב';
+  return 'לילה טוב';
+}
+
+
+const STORAGE_KEY = 'htz_moked_dashboard_v2';
+function loadState(){
+  try{ const raw = localStorage.getItem(STORAGE_KEY); if(raw) return JSON.parse(raw); }
+  catch(e){ console.error(e); }
+  return null;
+}
+function saveState(state){
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+  catch(e){ console.error(e); }
+}
+
+/* ============================================================
+   GOOGLE SHEETS SYNC (one-way: site -> sheet, backup only)
+   Paste the Apps Script "Web app URL" here once deployed.
+   Leave empty to disable sync (app works normally without it).
+============================================================ */
+const SHEETS_SYNC_URL = 'https://script.google.com/macros/s/AKfycbzYvEny6Jq5H4HsWZYRZSokGCNOgssNx5Jq59r8CCj7tzXsgS_Du17vTXsLUzOxG8RC/exec';
+
+let _syncTimer = null;
+function syncToSheets(state, updatedBy){
+  if(!SHEETS_SYNC_URL) return;
+  if(_syncTimer) clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(() => {
+    fetch(SHEETS_SYNC_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: {'Content-Type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify({ state, updatedBy }),
+    }).catch(err => console.error('sheets sync failed', err));
+  }, 2000);
+}
+
+/* ============================================================
+   USERS / ROLES
+============================================================ */
+const USERS = [
+  {id:'mm', name:'שרון', email:'sharon.raichenberg@gav.co.il', roleKey:'mm', roleTitle:'מנהלת מוקד'},
+  {id:'mn1', name:'פז', email:'paz.co@gav.co.il', roleKey:'mnhz', roleTitle:'מנהלת צוות פז', team:'team1'},
+  {id:'mn2', name:'ספיר', email:'sapir.menashe@gav.co.il', roleKey:'mnhz', roleTitle:'מנהלת צוות ספיר', team:'team2'},
+  {id:'mnm', name:'רון', email:'ron.shemesh@gav.co.il', roleKey:'mnmsh', subRole:'mnm', roleTitle:'מנהל משמרת'},
+  {id:'ach', name:'אברהים', email:'ibrahim.aburomi@gav.co.il', roleKey:'mnmsh', subRole:'ach', roleTitle:'אחראי משמרת'},
+  {id:'admin', name:'עומרי', email:'omri.sa@gav.co.il', roleKey:'admin', roleTitle:'מנהל מערכת'},
+];
+
+/* ============================================================
+   TASKS PER ROLE (יומי/שבועי/חודשי וכו')
+============================================================ */
+const TASKS_DEFAULT = {
+  mm: {
+    "יומי": [
+      {id:'mm-d1', text:'דיווח', done:false},
+      {id:'mm-d2', text:'ניתוח סקרי שירות', done:false},
+      {id:'mm-d3', text:'ניתוח נתוני יום האתמול', done:false},
+    ],
+    "שבועי": [
+      {id:'mm-w1', text:'ישיבת מנהלים שבועית', done:false},
+      {id:'mm-w2', text:'תחרות צוותית שבועית', done:false},
+      {id:'mm-w3', text:'תחרות חודשית לפי נושאים', done:false},
+    ],
+    "דו-שבועי": [
+      {id:'mm-b1', text:'תחקור פיצויים + הפקת לקחים', done:false},
+    ],
+    "חודשי": [
+      {id:'mm-m1', text:'גיבוש תכנית עבודה חודשית', done:false},
+      {id:'mm-m2', text:'קביעת יעדים ו-KPIs כלל-מוקדיים', done:false},
+      {id:'mm-m3', text:'שולחן עגול עם הנציגים + הייטקזון', done:false},
+      {id:'mm-m4', text:'אישור תגמול + מצטיין חודשי', done:false},
+    ],
+    "לפי צורך": [
+      {id:'mm-n1', text:'אישור נהלים ומדיניות', done:false},
+      {id:'mm-n2', text:'תיקוף טופס משוב', done:false},
+    ],
+  },
+  mnhz: {
+    "יומי": [
+      {id:'tl-d1', text:'חניכה אישית שוטפת', done:false},
+      {id:'tl-d2', text:'מקשובים + האזנות לנציגים', done:false},
+      {id:'tl-d3', text:'שליחת סיכום יומי', done:false},
+    ],
+    "שבועי": [
+      {id:'tl-w1', text:'תכנית עבודה לנציגים חלשים', done:false},
+      {id:'tl-w2', text:'תדריכי שירות שבועיים', done:false},
+      {id:'tl-w3', text:'חיבור נציגים למותג + פרסום הצלחות', done:false},
+    ],
+    "חודשי": [
+      {id:'tl-m1', text:'משוב חודשי אישי + תמריץ', done:false},
+    ],
+  },
+  mnmsh: {
+    "שוטף": [
+      {id:'mn-s1', text:'פתיחת / סגירת יוזרים', done:false},
+      {id:'ac-s1', text:'ניהול תורים + זמינות בזמן אמת', done:false},
+    ],
+    "כל משמרת": [
+      {id:'ac-c1', text:'קבלת משמרת - בדיקת תורים ועומס', done:false},
+    ],
+    "שעתי": [
+      {id:'ac-h1', text:'מעקב תפוקה שעתי (11, 13, 15, סוף משמרת)', done:false},
+    ],
+    "יומי": [
+      {id:'mn-d1', text:'סטטוס כוח אדם חיפה + כפ"ס', done:false},
+      {id:'mn-d2', text:"נוהל צ'קלה - איתור תביעות יומי", done:false},
+      {id:'mn-d3', text:'הפקת נתוני יום קודם + הפצה', done:false},
+      {id:'mn-d4', text:'מעקב KPIs שוטף - חורגות, מענה, סקר', done:false},
+      {id:'mn-d5', text:'תצוגות + מענה סטטוס שעתי (10, 12, 14, 16)', done:false},
+      {id:'ac-d1', text:'מועדון ה-5 - זיהוי חורגים + קולבק', done:false},
+      {id:'ac-d2', text:'מעקב תפוקות + חורגות יום קודם', done:false},
+      {id:'ac-d3', text:'סיכום יומי + מסירת משמרת', done:false},
+      {id:'ac-d4', text:'עדכון חוסרים / איחורים יומי', done:false},
+    ],
+    "שבועי": [
+      {id:'mn-w1', text:'הוצאת נתונים שבועיים + פרסום', done:false},
+      {id:'mn-w2', text:'הוצאת נתונים לפי צוותים ושליחה למנהלים', done:false},
+      {id:'mn-w3', text:'סידור עבודה', done:false},
+    ],
+    "חודשי": [
+      {id:'mn-m1', text:'הוצאת נתוני סיכום חודש', done:false},
+    ],
+    "לפי צורך": [
+      {id:'ac-n1', text:'ניהול חלוקת תצוגות', done:false},
+      {id:'ac-n2', text:'נוהל ריבוי פניות', done:false},
+    ],
+  },
+};
+
+/* ============================================================
+   SHARED CONSTANTS
+============================================================ */
+const QUEUE_NAMES = ["הייטקזון","וואלה","וואלה רשתות","מצר","גולד","פועלים","מתנות"];
+const DISPLAY_NAMES = ["כוללת","וואלה","וואלה רשתות","מצר","גולד","פועלים","מתנות"];
+const ROLE_BREAKDOWN = ["הייטקזון","וואלה","פועלים","מתנות","גלאסיקס"];
+
+/* ============================================================
+   TARGETS VS ACTUALS (3 separate boards: moked, team1, team2)
+============================================================ */
+const TARGET_CATEGORIES = ["% חורגות", "סקר שביעות רצון", "תפוקות"];
+
+function defaultTargetBoard(){
+  return {
+    data: {
+      "% חורגות": {goal:30, actual:0},
+      "סקר שביעות רצון": {goal:85, actual:0},
+      "תפוקות": {goal:6, actual:0},
+    },
+    updatedAt: null,
+  };
+}
+
+function defaultWallaBoard(){
+  return {
+    data: {
+      "% חורגות": {goal:30, actual:0},
+    },
+    updatedAt: null,
+  };
+}
+
+const TARGETS_DEFAULT = {
+  moked: defaultTargetBoard(),
+  team1: defaultTargetBoard(),
+  team2: defaultTargetBoard(),
+};
+
+const WALLA_TARGETS_DEFAULT = defaultWallaBoard();
+
+const TEAM_LABELS = {moked:'כלל המוקד', team1:'צוות פז', team2:'צוות ספיר'};
+
+
+/* ============================================================
+   MORNING MANPOWER STATUS (separate, due by 9:00 AM, once daily)
+============================================================ */
+function defaultManpowerStatus(){
+  return { haifa:'', kfs:'', total:'', breakdown: ROLE_BREAKDOWN.reduce((a,k)=>({...a,[k]:''}),{}), updatedAt: null };
+}
+
+/* ============================================================
+   HOURLY / SHIFT STATUS (single, whole-floor, recurring every 2 hours)
+============================================================ */
+function defaultHourlyStatus(){
+  return {
+    queues: QUEUE_NAMES.reduce((a,k)=>({...a,[k]:{in:'',answered:''}}),{}),
+    displays: DISPLAY_NAMES.reduce((a,k)=>({...a,[k]:{qty:'',distributed:''}}),{}),
+    tzakla: {found:'', inProgress:'', reported:false},
+    updatedAt: null,
+  };
+}
+
+/* ============================================================
+   FEEDBACK TRACKING (per team-manager, monthly log per employee)
+============================================================ */
+const FEEDBACK_TYPES = ["כתף אל כתף","משוב פרונטלי","שיחת אישית","שיחת בונוס"];
+
+const DEFAULT_EMPLOYEES = {
+  team1: ['עמרי','יאנה','סתיו','סמי','נויה'],
+  team2: ['דניאל','איתי','שירה','מאיה','רותם'],
+};
+
+function monthKey(date){
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
+}
+function monthLabel(key){
+  const [y,m] = key.split('-');
+  const names = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  return `${names[parseInt(m,10)-1]} ${y}`;
+}
+function shiftMonth(key, delta){
+  let [y,m] = key.split('-').map(Number);
+  m += delta;
+  while(m > 12){ m -= 12; y += 1; }
+  while(m < 1){ m += 12; y -= 1; }
+  return `${y}-${String(m).padStart(2,'0')}`;
+}
+
+/* feedbackLog structure:
+   { team1: { employees: ['name', ...], months: { '2026-06': { 'name': { 'type': [{id,date,notes}] } } } } }
+*/
+function defaultFeedbackLog(){
+  const result = {};
+  for(const team of ['team1','team2']){
+    result[team] = { employees: [...DEFAULT_EMPLOYEES[team]], months: {}, forms: {} };
+  }
+  return result;
+}
+
+/* feedbackLog[team].forms structure:
+   { 'employeeName': [ {id, date, data: {...form fields...}} ] }
+*/
+function emptyFeedbackForm(){
+  return {
+    agentName: '',
+    date: new Date().toLocaleDateString('he-IL'),
+    feedbackType: '',
+    metrics: {
+      "% חורגות": {actual:'', mokedTarget:'30', personalTarget:''},
+      "תפוקות": {actual:'', mokedTarget:'6', personalTarget:''},
+      "סקר שביעות רצון": {actual:'', mokedTarget:'85', personalTarget:''},
+    },
+    systemUsage: {
+      macro: '',
+      vendorTone: '',
+    },
+    strengths: ['','',''],
+    improvements: ['','',''],
+    nextSteps: ['','','',''],
+    selfRating: '',
+    followUp: '',
+    managerName: '',
+  };
+}
+
+/* ============================================================
+   DISPLAYS / LINKS (shared, visible to everyone)
+============================================================ */
+function defaultLinks(){
+  return [
+    {id:'lnk1', name:'תצוגת מענה כללית', url:'https://example.com/display1'},
+    {id:'lnk2', name:'תצוגת תורים בזמן אמת', url:'https://example.com/display2'},
+  ];
+}
+
+/* ============================================================
+   ICONS
+============================================================ */
+const Icon = ({ name, className = "w-5 h-5", style }) => {
+  const paths = {
+    home: "M3 12l9-9 9 9M5 10v10h14V10",
+    users: "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
+    clock: "M12 22a10 10 0 100-20 10 10 0 000 20zM12 6v6l4 2",
+    target: "M12 22a10 10 0 100-20 10 10 0 000 20zM12 16a4 4 0 100-8 4 4 0 000 8zM12 12h0",
+    plus: "M12 5v14M5 12h14",
+    trash: "M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2m3 0v14a1 1 0 01-1 1H6a1 1 0 01-1-1V6h14z",
+    check: "M20 6L9 17l-5-5",
+    checklist: "M9 11l3 3L22 4 M3 5h12 M3 12h7 M3 19h7 M3 5l1 1 M3 12l1 1 M3 19l1 1",
+    camera: "M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2zM12 17a4 4 0 100-8 4 4 0 000 8z",
+    chevron: "M9 18l6-6-6-6",
+    refresh: "M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15",
+    link: "M10 13a5 5 0 007.07 0l3-3a5 5 0 00-7.07-7.07l-1 1M14 11a5 5 0 00-7.07 0l-3 3a5 5 0 007.07 7.07l1-1",
+    edit: "M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 113 3L12 15l-4 1 1-4 9.5-9.5z",
+    file: "M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M9 13h6 M9 17h6",
+    download: "M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3",
+    bell: "M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9 M13.73 21a2 2 0 01-3.46 0",
+  };
+  return (
+    <svg className={className} style={style} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d={paths[name] || ""} />
+    </svg>
+  );
+};
+
+/* ============================================================
+   GAUGE
+============================================================ */
+function Gauge({ name, goal, actual, invert, unit }) {
+  let pct = goal > 0 ? (invert ? (goal/Math.max(actual,0.0001))*100 : (actual/goal)*100) : 0;
+  pct = Math.max(0, Math.min(100, pct));
+  const pctR = Math.round(pct);
+  const r=56, sw=11, nr=r-sw/2, circ=nr*2*Math.PI, off=circ-(pct/100)*circ;
+  let color = pctR>=100 ? C.green : pctR>=85 ? C.teal : C.red;
+  return (
+    <div className="flex flex-col items-center bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex-1 min-w-[150px]">
+      <div className="relative w-[120px] h-[120px]">
+        <svg height={r*2} width={r*2} className="-rotate-90">
+          <circle stroke="#EEF2F3" fill="transparent" strokeWidth={sw} r={nr} cx={r} cy={r} />
+          <circle stroke={color} fill="transparent" strokeWidth={sw}
+            strokeDasharray={circ+' '+circ}
+            style={{strokeDashoffset:off, transition:'stroke-dashoffset 0.6s ease'}}
+            strokeLinecap="round" r={nr} cx={r} cy={r} />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-xl font-bold" style={{color}}>{pctR}%</span>
+        </div>
+      </div>
+      <p className="mt-2 font-medium text-gray-700 text-sm text-center">{name}</p>
+      <p className="text-xs text-gray-400 mt-1">
+        ביצוע <span className="font-medium text-gray-600">{actual}{unit}</span> / יעד <span className="font-medium text-gray-600">{goal}{unit}</span>
+      </p>
+    </div>
+  );
+}
+
+/* ============================================================
+   SIDEBAR
+============================================================ */
+function Sidebar({ current, setCurrent, user, onLogout, mobileOpen, setMobileOpen }) {
+  const isAdmin = user.roleKey === 'admin';
+  const items = [
+    {key:'dashboard', label:'לוח מחוונים', icon:'home', show:true},
+    {key:'checklist', label:"צ'ק-ליסט משימות", icon:'checklist', show: true},
+    {key:'feedback', label:'מעקב משובים', icon:'users', show: isAdmin || user.roleKey==='mm' || user.roleKey==='mnhz'},
+    {key:'targets', label:'יעד מול ביצוע - עדכון', icon:'target', show: isAdmin || user.roleKey==='mnmsh'},
+    {key:'manpower', label:'סטטוס כוח אדם (פתיחת משמרת)', icon:'users', show: isAdmin || user.roleKey==='mnmsh' || user.roleKey==='mm'},
+    {key:'hourly', label:'סטטוס שעתי', icon:'clock', show: isAdmin || user.roleKey==='mnmsh' || user.roleKey==='mm'},
+    {key:'links', label:'תצוגות', icon:'link', show: true},
+  ];
+  return (
+    <div className={`fixed lg:sticky top-0 right-0 h-screen z-40 transition-transform no-print ${mobileOpen?'translate-x-0':'translate-x-full lg:translate-x-0'} w-64 bg-white border-l border-gray-100 flex flex-col`}>
+      <div className="p-5 border-b border-gray-100 flex items-center gap-3">
+        <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold" style={{background:C.dark}}>
+          h<span style={{fontSize:'0.8em'}}>t</span><span style={{fontSize:'0.6em', position:'relative', top:'-4px'}}>z</span>
+        </div>
+        <div>
+          <p className="font-bold text-gray-800 leading-tight">מוקד הייטקזון</p>
+          <p className="text-xs" style={{color:C.tealDark}}>ניהול משימות וסטטוס</p>
+        </div>
+      </div>
+      <div className="p-4 border-b border-gray-100 flex items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-bold text-gray-700">{user.name}</p>
+          <p className="text-xs text-gray-400">{user.roleTitle}</p>
+        </div>
+        <button onClick={onLogout} className="text-xs px-2 py-1 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">התנתק</button>
+      </div>
+      <nav className="flex-1 p-3 space-y-1">
+        {items.filter(i=>i.show).map(item=>(
+          <button key={item.key} onClick={()=>{setCurrent(item.key); setMobileOpen(false);}}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-colors ${current===item.key?'text-white':'text-gray-600 hover:bg-gray-50'}`}
+            style={current===item.key?{background:C.tealDark}:{}}>
+            <Icon name={item.icon} className="w-5 h-5" />
+            {item.label}
+          </button>
+        ))}
+      </nav>
+      <div className="p-4 border-t border-gray-100 text-xs text-gray-400 text-center">כל השינויים נשמרים אוטומטית</div>
+    </div>
+  );
+}
+
+/* ============================================================
+   TARGETS BOARD (single board display, used inside dashboard)
+============================================================ */
+function TargetsBoard({ board, title, showCamera, categories = TARGET_CATEGORIES }) {
+  const wrapRef = useRef(null);
+  const [photo, setPhoto] = useState(false);
+
+  const updatedLabel = board.updatedAt
+    ? new Date(board.updatedAt).toLocaleString('he-IL', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'})
+    : 'אין עדכון עדיין';
+
+  return (
+    <div ref={wrapRef} className={photo ? 'photo-mode' : ''}>
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3" style={{background:C.tealDark}}>
+          <h3 className="font-bold text-white">{title} - יעד מול ביצוע</h3>
+          {showCamera && (
+            <button onClick={()=>setPhoto(!photo)} className="ui-only text-xs bg-white/15 text-white px-3 py-1.5 rounded-lg flex items-center gap-1 hover:bg-white/25">
+              <Icon name="camera" className="w-4 h-4" /> {photo ? 'חזרה' : 'מצב צילום'}
+            </button>
+          )}
+        </div>
+        <p className="px-4 pt-3 text-xs text-gray-400">עודכן לאחרונה: {updatedLabel}</p>
+        <div className="flex flex-wrap gap-4 p-4">
+          {categories.map(cat => {
+            const row = board.data[cat] || {goal:0, actual:0};
+            const unit = cat==='תפוקות' ? '' : '%';
+            const invert = cat === '% חורגות';
+            return (
+              <Gauge key={cat} name={cat} goal={row.goal} actual={row.actual} unit={unit} invert={invert} />
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   DASHBOARD SCREEN (target boards only)
+============================================================ */
+function DashboardScreen({ user, targets, wallaTargets }) {
+  const isAdmin = user.roleKey === 'admin';
+  const isMnmsh = user.roleKey === 'mnmsh';
+  const [boardView, setBoardView] = useState('moked');
+  const [allPhoto, setAllPhoto] = useState(false);
+
+  // which target boards to show for this user
+  let boardsToShow = [];
+  if(isAdmin) boardsToShow = ['moked','team1','team2'];
+  else if(user.roleKey === 'mm') boardsToShow = ['moked','team1','team2'];
+  else if(user.roleKey === 'mnhz') boardsToShow = [user.team];
+  else if(isMnmsh) boardsToShow = ['moked','team1','team2'];
+
+  // for mnmsh photo mode: only show moked + walla
+  const photoBoards = isMnmsh ? ['moked'] : boardsToShow;
+
+  return (
+    <div className={`space-y-6 ${allPhoto ? 'photo-mode' : ''}`}>
+      <div className="flex items-start justify-between flex-wrap gap-3 ui-only">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800 mb-1">לוח מחוונים</h2>
+          <p className="text-sm text-gray-400">{isMnmsh ? getGreeting() + ' ' : ''}שלום {user.name} - {user.roleTitle}</p>
+        </div>
+        {(isMnmsh || boardsToShow.length > 1) && (
+          <button onClick={()=>setAllPhoto(!allPhoto)} className="text-xs bg-white border border-gray-200 text-gray-600 px-3 py-1.5 rounded-lg flex items-center gap-1 hover:bg-gray-50">
+            <Icon name="camera" className="w-4 h-4" /> {allPhoto ? 'חזרה לעריכה' : isMnmsh ? 'צילום יומי' : 'צילום כללי - כל הלוחות'}
+          </button>
+        )}
+      </div>
+
+      {boardsToShow.length > 0 && (
+        <div className="space-y-4">
+          <h3 className="text-sm font-semibold text-gray-500 mb-1 ui-only">יעדים מול ביצוע</h3>
+          {!allPhoto && !isMnmsh && boardsToShow.length > 1 && (
+            <div className="flex gap-2 mb-1">
+              {boardsToShow.map(b => (
+                <button key={b} onClick={()=>setBoardView(b)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium border ${boardView===b ? 'text-white' : 'text-gray-600 bg-white border-gray-200'}`}
+                  style={boardView===b?{background:C.tealDark, borderColor:C.tealDark}:{}}>
+                  {TEAM_LABELS[b]}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {allPhoto && isMnmsh ? (
+            // mnmsh photo mode: only moked + walla with note about accumulation
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-xs text-orange-600 font-medium mb-2 bg-orange-50 px-3 py-2 rounded-lg">
+                <span>*</span> <span>הנתונים מצטברים מתחילת החודש</span>
+              </div>
+              <TargetsBoard board={targets['moked']} title={TEAM_LABELS['moked']} showCamera={false} />
+              {wallaTargets && <TargetsBoard board={wallaTargets} title="וואלה" categories={["% חורגות"]} showCamera={false} />}
+            </div>
+          ) : allPhoto ? (
+            // other roles photo mode: show ALL boards stacked
+            <div className="space-y-4">
+              {photoBoards.map(b => (
+                <TargetsBoard key={b} board={targets[b]} title={TEAM_LABELS[b]} showCamera={false} />
+              ))}
+              {wallaTargets && <TargetsBoard board={wallaTargets} title="וואלה" categories={["% חורגות"]} showCamera={false} />}
+            </div>
+          ) : (
+            <TargetsBoard board={targets[boardsToShow.length>1 ? boardView : boardsToShow[0]]}
+              title={TEAM_LABELS[boardsToShow.length>1 ? boardView : boardsToShow[0]]}
+              showCamera={false} />
+          )}
+        </div>
+      )}
+
+      {!allPhoto && wallaTargets && (
+        <div>
+          <TargetsBoard board={wallaTargets} title="וואלה" categories={["% חורגות"]} showCamera={false} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   CHECKLIST SCREEN (task checklist, separate page for all roles)
+============================================================ */
+function ChecklistScreen({ user, tasks, setTasks }) {
+  const isAdmin = user.roleKey === 'admin';
+  const isMnmsh = user.roleKey === 'mnmsh';
+  const taskRoleOptions = ['mm','mnhz','mnmsh'];
+  const taskRoleLabels = {mm:'מנהלת מוקד', mnhz:'מנהלות צוות', mnmsh:'מנמ"ש / אחמ"ש'};
+  const subRoleOptions = isMnmsh ? ['mnm', 'ach'] : [];
+  const subRoleLabels = {mnm:'מנהל משמרת (רון)', ach:'אחראי משמרת (אברהים)'};
+  
+  const [viewRole, setViewRole] = useState('mm');
+  const [viewSubRole, setViewSubRole] = useState(user.subRole || 'mnm');
+  
+  const effectiveRoleKey = isAdmin ? viewRole : user.roleKey;
+  const effectiveSubRole = isMnmsh ? viewSubRole : null;
+
+  const groups = tasks[effectiveRoleKey] || {};
+  const tabKeys = Object.keys(groups);
+  const [activeTab, setActiveTab] = useState(tabKeys[0] || '');
+  const [newTaskText, setNewTaskText] = useState('');
+
+  useEffect(()=>{
+    if(!tabKeys.includes(activeTab) && tabKeys.length) setActiveTab(tabKeys[0]);
+  }, [effectiveRoleKey]);
+
+  const toggleTask = (tab, id) => {
+    setTasks(prev => {
+      const updated = {...prev};
+      updated[effectiveRoleKey] = {...updated[effectiveRoleKey]};
+      updated[effectiveRoleKey][tab] = updated[effectiveRoleKey][tab].map(t => t.id===id ? {...t, done:!t.done} : t);
+      return updated;
+    });
+  };
+  const addTask = (tab) => {
+    if(!newTaskText.trim()) return;
+    setTasks(prev => {
+      const updated = {...prev};
+      updated[effectiveRoleKey] = {...updated[effectiveRoleKey]};
+      updated[effectiveRoleKey][tab] = [...(updated[effectiveRoleKey][tab]||[]), {id:'t-'+Date.now(), text:newTaskText.trim(), done:false}];
+      return updated;
+    });
+    setNewTaskText('');
+  };
+  const deleteTask = (tab, id) => {
+    setTasks(prev => {
+      const updated = {...prev};
+      updated[effectiveRoleKey] = {...updated[effectiveRoleKey]};
+      updated[effectiveRoleKey][tab] = updated[effectiveRoleKey][tab].filter(t=>t.id!==id);
+      return updated;
+    });
+  };
+
+  const currentTasks = groups[activeTab] || [];
+  const doneCount = currentTasks.filter(t=>t.done).length;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-bold text-gray-800 mb-1">צ'ק-ליסט משימות</h2>
+        <p className="text-sm text-gray-400">{isMnmsh ? getGreeting() + ' ' : ''}שלום {user.name} - {user.roleTitle}</p>
+      </div>
+      <div>
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+          <h3 className="text-sm font-semibold text-gray-500">
+            {isAdmin ? `משימות - ${taskRoleLabels[viewRole]}` : isMnmsh ? `משימות - ${subRoleLabels[viewSubRole]}` : 'המשימות שלי'}
+          </h3>
+          {isAdmin && (
+            <div className="flex gap-2">
+              {taskRoleOptions.map(r => (
+                <button key={r} onClick={()=>setViewRole(r)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${viewRole===r ? 'text-white' : 'text-gray-600 bg-white border-gray-200'}`}
+                  style={viewRole===r?{background:C.tealDark, borderColor:C.tealDark}:{}}>
+                  {taskRoleLabels[r]}
+                </button>
+              ))}
+            </div>
+          )}
+          {isMnmsh && (
+            <div className="flex gap-2">
+              {subRoleOptions.map(sr => (
+                <button key={sr} onClick={()=>setViewSubRole(sr)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${viewSubRole===sr ? 'text-white' : 'text-gray-600 bg-white border-gray-200'}`}
+                  style={viewSubRole===sr?{background:C.tealDark, borderColor:C.tealDark}:{}}>
+                  {subRoleLabels[sr]}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex border-b border-gray-100 overflow-x-auto">
+            {tabKeys.map(tab => (
+              <button key={tab} onClick={()=>setActiveTab(tab)}
+                className={`px-5 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${activeTab===tab?'':'border-transparent text-gray-400 hover:text-gray-600'}`}
+                style={activeTab===tab?{borderColor:C.tealDark, color:C.tealDark}:{}}>
+                {tab}
+              </button>
+            ))}
+          </div>
+          <div className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs text-gray-400">{doneCount} / {currentTasks.length} הושלמו</span>
+            </div>
+            <div className="space-y-2">
+              {currentTasks.map(task => (
+                <div key={task.id} className="flex items-center gap-3 group">
+                  <button onClick={()=>toggleTask(activeTab, task.id)}
+                    className="w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0"
+                    style={{borderColor: task.done?C.tealDark:'#D1D5DB', background: task.done?C.tealDark:'transparent'}}>
+                    {task.done && <Icon name="check" className="w-3 h-3 text-white" />}
+                  </button>
+                  <span className={`flex-1 text-sm ${task.done?'line-through text-gray-400':'text-gray-700'}`}>{task.text}</span>
+                  <button onClick={()=>deleteTask(activeTab, task.id)} className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400">
+                    <Icon name="trash" className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+              {currentTasks.length===0 && <p className="text-sm text-gray-400 py-4 text-center">אין משימות בקטגוריה זו</p>}
+            </div>
+            <div className="flex gap-2 mt-4">
+              <input value={newTaskText} onChange={e=>setNewTaskText(e.target.value)}
+                onKeyDown={e=>e.key==='Enter' && addTask(activeTab)}
+                placeholder="משימה חדשה..."
+                className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none" />
+              <button onClick={()=>addTask(activeTab)} className="px-4 py-2 rounded-lg text-white text-sm font-medium flex items-center gap-1" style={{background:C.orange}}>
+                <Icon name="plus" className="w-4 h-4" /> הוספה
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   FEEDBACK TRACKING SCREEN (monthly log per employee)
+============================================================ */
+function FeedbackScreen({ feedbackLog, setFeedbackLog, user }) {
+  const canSwitchTeam = user.roleKey === 'mm' || user.roleKey === 'admin';
+  const teamKey = canSwitchTeam ? null : user.team;
+  const [viewTeam, setViewTeam] = useState(teamKey || 'team1');
+  const team = canSwitchTeam ? viewTeam : teamKey;
+
+  const [month, setMonth] = useState(monthKey(new Date()));
+  const [expanded, setExpanded] = useState(null); // employee name currently expanded
+  const [newEmpName, setNewEmpName] = useState('');
+  const [noteDrafts, setNoteDrafts] = useState({}); // key: `${name}-${type}` -> text
+  const [formView, setFormView] = useState(null); // {employee, formId} or null
+
+  const teamData = feedbackLog[team] || { employees: [...(DEFAULT_EMPLOYEES[team]||[])], months: {}, forms: {} };
+  const monthData = teamData.months[month] || {};
+  const teamForms = teamData.forms || {};
+
+  const getEntries = (name, type) => (monthData[name] && monthData[name][type]) || [];
+
+  const addEntry = (name, type) => {
+    const draftKey = `${name}-${type}`;
+    const notes = (noteDrafts[draftKey] || '').trim();
+    setFeedbackLog(prev => {
+      const updated = {...prev};
+      const t = updated[team] || { employees: [...(DEFAULT_EMPLOYEES[team]||[])], months: {} };
+      const months = {...t.months};
+      const md = {...(months[month] || {})};
+      const emp = {...(md[name] || {})};
+      const list = [...(emp[type] || [])];
+      list.push({id:'e-'+Date.now(), date: new Date().toLocaleDateString('he-IL'), notes});
+      emp[type] = list;
+      md[name] = emp;
+      months[month] = md;
+      updated[team] = {...t, months};
+      return updated;
+    });
+    setNoteDrafts(prev => ({...prev, [draftKey]: ''}));
+  };
+
+  const deleteEntry = (name, type, entryId) => {
+    setFeedbackLog(prev => {
+      const updated = {...prev};
+      const t = updated[team];
+      const months = {...t.months};
+      const md = {...(months[month] || {})};
+      const emp = {...(md[name] || {})};
+      emp[type] = (emp[type] || []).filter(e => e.id !== entryId);
+      md[name] = emp;
+      months[month] = md;
+      updated[team] = {...t, months};
+      return updated;
+    });
+  };
+
+  const addEmployee = () => {
+    if(!newEmpName.trim()) return;
+    setFeedbackLog(prev => {
+      const updated = {...prev};
+      const t = updated[team] || { employees: [], months: {} };
+      updated[team] = {...t, employees: [...t.employees, newEmpName.trim()]};
+      return updated;
+    });
+    setNewEmpName('');
+  };
+
+  const removeEmployee = (name) => {
+    setFeedbackLog(prev => {
+      const updated = {...prev};
+      const t = updated[team];
+      updated[team] = {...t, employees: t.employees.filter(e => e !== name)};
+      return updated;
+    });
+  };
+
+  const totalForEmployee = (name) => {
+    const emp = monthData[name] || {};
+    return FEEDBACK_TYPES.reduce((sum, type) => sum + (emp[type]||[]).length, 0);
+  };
+
+  const getEmployeeForms = (name) => teamForms[name] || [];
+
+  const createForm = (name) => {
+    const newForm = { id:'form-'+Date.now(), date: new Date().toLocaleDateString('he-IL'), data: {...emptyFeedbackForm(), agentName: name} };
+    setFeedbackLog(prev => {
+      const updated = {...prev};
+      const t = updated[team];
+      const forms = {...(t.forms||{})};
+      forms[name] = [...(forms[name]||[]), newForm];
+      updated[team] = {...t, forms};
+      return updated;
+    });
+    setFormView({employee: name, formId: newForm.id});
+  };
+
+  const updateForm = (name, formId, newData) => {
+    setFeedbackLog(prev => {
+      const updated = {...prev};
+      const t = updated[team];
+      const forms = {...(t.forms||{})};
+      forms[name] = (forms[name]||[]).map(f => f.id===formId ? {...f, data: newData} : f);
+      updated[team] = {...t, forms};
+      return updated;
+    });
+  };
+
+  const deleteForm = (name, formId) => {
+    setFeedbackLog(prev => {
+      const updated = {...prev};
+      const t = updated[team];
+      const forms = {...(t.forms||{})};
+      forms[name] = (forms[name]||[]).filter(f => f.id !== formId);
+      updated[team] = {...t, forms};
+      return updated;
+    });
+    if(formView && formView.employee===name && formView.formId===formId) setFormView(null);
+  };
+
+  if(formView){
+    const forms = getEmployeeForms(formView.employee);
+    const form = forms.find(f => f.id === formView.formId);
+    if(form){
+      return (
+        <FeedbackFormScreen
+          form={form}
+          onChange={(newData)=>updateForm(formView.employee, form.id, newData)}
+          onBack={()=>setFormView(null)}
+          onDelete={()=>deleteForm(formView.employee, form.id)}
+        />
+      );
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800 mb-1">מעקב משובים</h2>
+          <p className="text-sm text-gray-400">סימון שיחות כתף אל כתף, משוב פרונטלי, אישית ובונוס - לפי עובד וחודש</p>
+        </div>
+        {canSwitchTeam && (
+          <div className="flex gap-2">
+            {['team1','team2'].map(t => (
+              <button key={t} onClick={()=>setViewTeam(t)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium border ${viewTeam===t?'text-white':'text-gray-600 bg-white border-gray-200'}`}
+                style={viewTeam===t?{background:C.tealDark, borderColor:C.tealDark}:{}}>
+                {TEAM_LABELS[t]}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* month navigator */}
+      <div className="flex items-center justify-center gap-3 bg-white rounded-2xl border border-gray-100 shadow-sm p-3">
+        <button onClick={()=>setMonth(m=>shiftMonth(m,-1))} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50">
+          <Icon name="chevron" className="w-4 h-4 rotate-180" />
+        </button>
+        <span className="font-bold text-gray-700 min-w-[120px] text-center">{monthLabel(month)}</span>
+        <button onClick={()=>setMonth(m=>shiftMonth(m,1))} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50">
+          <Icon name="chevron" className="w-4 h-4" />
+        </button>
+        {month !== monthKey(new Date()) && (
+          <button onClick={()=>setMonth(monthKey(new Date()))} className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 flex items-center gap-1">
+            <Icon name="refresh" className="w-3 h-3" /> חזרה לחודש הנוכחי
+          </button>
+        )}
+      </div>
+
+      {/* employees table */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{background:C.tealLight}}>
+              <th className="px-4 py-3 text-right font-semibold text-gray-600"></th>
+              <th className="px-4 py-3 text-right font-semibold text-gray-600">שם עובד</th>
+              {FEEDBACK_TYPES.map(t => <th key={t} className="px-3 py-3 text-center font-semibold text-gray-600">{t}</th>)}
+              <th className="px-3 py-3 text-center font-semibold text-gray-600">סה"כ</th>
+              <th className="px-3 py-3"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {teamData.employees.map(name => {
+              const isOpen = expanded === name;
+              return (
+                <React.Fragment key={name}>
+                  <tr className="border-t border-gray-50 hover:bg-gray-50 cursor-pointer" onClick={()=>setExpanded(isOpen ? null : name)}>
+                    <td className="px-4 py-2 text-center text-gray-400">
+                      <Icon name="chevron" className={`w-4 h-4 transition-transform ${isOpen ? '-rotate-90' : '-rotate-0'}`} />
+                    </td>
+                    <td className="px-4 py-2 font-medium text-gray-700">{name}</td>
+                    {FEEDBACK_TYPES.map(t => (
+                      <td key={t} className="px-3 py-2 text-center font-bold" style={{color:C.tealDark}}>{getEntries(name,t).length}</td>
+                    ))}
+                    <td className="px-3 py-2 text-center font-bold text-gray-700">{totalForEmployee(name)}</td>
+                    <td className="px-3 py-2 text-center">
+                      <button onClick={(e)=>{e.stopPropagation(); removeEmployee(name);}} className="text-gray-300 hover:text-red-400">
+                        <Icon name="trash" className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
+                  {isOpen && (
+                    <tr className="border-t border-gray-50" style={{background:C.tealLight}}>
+                      <td colSpan={FEEDBACK_TYPES.length+3} className="p-4">
+                        <div className="grid gap-4" style={{gridTemplateColumns:'repeat(auto-fit, minmax(220px,1fr))'}}>
+                          {FEEDBACK_TYPES.map(type => {
+                            const entries = getEntries(name, type);
+                            const draftKey = `${name}-${type}`;
+                            return (
+                              <div key={type} className="bg-white rounded-xl border border-gray-100 p-3">
+                                <p className="text-sm font-semibold mb-2" style={{color:C.tealDark}}>{type} ({entries.length})</p>
+                                <div className="space-y-1 mb-2 max-h-32 overflow-y-auto">
+                                  {entries.map(entry => (
+                                    <div key={entry.id} className="flex items-start justify-between gap-2 text-xs bg-gray-50 rounded-lg px-2 py-1.5">
+                                      <div>
+                                        <p className="font-medium text-gray-600">{entry.date}</p>
+                                        {entry.notes && <p className="text-gray-400">{entry.notes}</p>}
+                                      </div>
+                                      <button onClick={()=>deleteEntry(name, type, entry.id)} className="text-gray-300 hover:text-red-400 flex-shrink-0">
+                                        <Icon name="trash" className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                  {entries.length===0 && <p className="text-xs text-gray-400">אין רישומים החודש</p>}
+                                </div>
+                                <div className="flex gap-1">
+                                  <input value={noteDrafts[draftKey] || ''} onChange={e=>setNoteDrafts(prev=>({...prev,[draftKey]:e.target.value}))}
+                                    placeholder="הערות (אופציונלי)"
+                                    className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-xs" />
+                                  <button onClick={()=>addEntry(name, type)} className="px-2 py-1 rounded-lg text-white text-xs font-medium flex items-center gap-1" style={{background:C.orange}}>
+                                    <Icon name="check" className="w-3 h-3" /> בוצע
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <div className="mt-4 bg-white rounded-xl border border-gray-100 p-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-sm font-semibold" style={{color:C.tealDark}}>טופסי משוב מפורטים</p>
+                            <button onClick={()=>createForm(name)} className="px-2 py-1 rounded-lg text-white text-xs font-medium flex items-center gap-1" style={{background:C.tealDark}}>
+                              <Icon name="plus" className="w-3 h-3" /> טופס חדש
+                            </button>
+                          </div>
+                          <div className="space-y-1">
+                            {getEmployeeForms(name).map(form => (
+                              <div key={form.id} className="flex items-center justify-between gap-2 text-xs bg-gray-50 rounded-lg px-2 py-1.5">
+                                <button onClick={()=>setFormView({employee:name, formId:form.id})} className="flex items-center gap-2 text-gray-600 hover:underline flex-1 text-right">
+                                  <Icon name="file" className="w-3.5 h-3.5" style={{color:C.tealDark}} />
+                                  משוב מתאריך {form.date}
+                                </button>
+                                <button onClick={()=>deleteForm(name, form.id)} className="text-gray-300 hover:text-red-400 flex-shrink-0">
+                                  <Icon name="trash" className="w-3 h-3" />
+                                </button>
+                              </div>
+                            ))}
+                            {getEmployeeForms(name).length===0 && <p className="text-xs text-gray-400">אין טפסי משוב עדיין</p>}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+        <div className="p-4 border-t border-gray-100 flex gap-2">
+          <input value={newEmpName} onChange={e=>setNewEmpName(e.target.value)}
+            onKeyDown={e=>e.key==='Enter' && addEmployee()}
+            placeholder="שם עובד חדש"
+            className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+          <button onClick={addEmployee} className="px-4 py-2 rounded-lg text-white text-sm font-medium flex items-center gap-1" style={{background:C.tealDark}}>
+            <Icon name="plus" className="w-4 h-4" /> הוספת עובד
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   FEEDBACK FORM SCREEN (detailed per-employee feedback, htz styled)
+============================================================ */
+const METRIC_CATEGORIES = ["% חורגות","תפוקות","סקר שביעות רצון"];
+
+function FeedbackFormScreen({ form, onChange, onBack, onDelete }) {
+  const data = form.data;
+
+  const update = (field, value) => onChange({...data, [field]: value});
+  const updateMetric = (cat, field, value) => onChange({...data, metrics: {...data.metrics, [cat]: {...data.metrics[cat], [field]: value}}});
+  const updateSystemUsage = (field, value) => onChange({...data, systemUsage: {...data.systemUsage, [field]: value}});
+  const updateListItem = (listName, idx, value) => {
+    const list = [...data[listName]];
+    list[idx] = value;
+    onChange({...data, [listName]: list});
+  };
+
+  const handlePrint = () => window.print();
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2 no-print">
+        <button onClick={onBack} className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 flex items-center gap-1">
+          <Icon name="chevron" className="w-4 h-4 rotate-180" /> חזרה למעקב משובים
+        </button>
+        <div className="flex gap-2">
+          <button onClick={handlePrint} className="px-4 py-2 rounded-lg text-sm font-medium text-white flex items-center gap-1" style={{background:C.tealDark}}>
+            <Icon name="download" className="w-4 h-4" /> הורדה / שמירה כ-PDF
+          </button>
+          <button onClick={onDelete} className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-red-400 flex items-center gap-1">
+            <Icon name="trash" className="w-4 h-4" /> מחיקת טופס
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl p-6 shadow-sm" style={{boxShadow:'0 4px 18px rgba(0,0,0,0.06)'}}>
+        {/* header */}
+        <div className="flex items-center justify-between border-b-2 pb-4 mb-4 flex-wrap gap-3" style={{borderColor:C.tealLight}}>
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold flex-shrink-0" style={{background:C.dark}}>
+            h<span style={{fontSize:'0.8em'}}>t</span><span style={{fontSize:'0.6em', position:'relative', top:'-4px'}}>z</span>
+          </div>
+          <div className="text-center flex-1">
+            <h2 className="text-lg font-bold text-gray-800">סיכום משוב</h2>
+            <p className="text-sm font-semibold" style={{color:C.tealDark}}>מוקד הייטקזון</p>
+          </div>
+          <div className="w-12"></div>
+        </div>
+
+        {/* top fields */}
+        <div className="grid gap-3 mb-4" style={{gridTemplateColumns:'repeat(auto-fit, minmax(180px,1fr))'}}>
+          <div>
+            <label className="block text-xs font-semibold mb-1" style={{color:C.tealDark}}>שם הנציג</label>
+            <input value={data.agentName} onChange={e=>update('agentName', e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold mb-1" style={{color:C.tealDark}}>תאריך</label>
+            <input value={data.date} onChange={e=>update('date', e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold mb-1" style={{color:C.tealDark}}>סוג המשוב (טלפון / דיגיטל)</label>
+            <input value={data.feedbackType} onChange={e=>update('feedbackType', e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+          </div>
+        </div>
+
+        {/* metrics table */}
+        <div className="mb-4 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{background:C.tealDark}}>
+                <th className="px-3 py-2 text-right text-white font-semibold rounded-tr-lg">מדד</th>
+                <th className="px-3 py-2 text-center text-white font-semibold">נתון בפועל</th>
+                <th className="px-3 py-2 text-center text-white font-semibold">יעד מוקדי</th>
+                <th className="px-3 py-2 text-center text-white font-semibold rounded-tl-lg">יעד אישי</th>
+              </tr>
+            </thead>
+            <tbody>
+              {METRIC_CATEGORIES.map((cat, idx) => (
+                <tr key={cat} style={{background: idx%2===0 ? C.tealLight : '#fff'}}>
+                  <td className="px-3 py-2 font-semibold text-gray-600">{cat}</td>
+                  <td className="px-3 py-2"><input value={data.metrics[cat].actual} onChange={e=>updateMetric(cat,'actual',e.target.value)}
+                    className="w-full text-center border border-gray-200 rounded-lg p-1 bg-white" /></td>
+                  <td className="px-3 py-2"><input value={data.metrics[cat].mokedTarget} onChange={e=>updateMetric(cat,'mokedTarget',e.target.value)}
+                    className="w-full text-center border border-gray-200 rounded-lg p-1 bg-white" /></td>
+                  <td className="px-3 py-2"><input value={data.metrics[cat].personalTarget} onChange={e=>updateMetric(cat,'personalTarget',e.target.value)}
+                    className="w-full text-center border border-gray-200 rounded-lg p-1 bg-white" /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* system usage */}
+        <div className="mb-4 rounded-xl border-2 p-3" style={{borderColor:C.tealDark}}>
+          <p className="text-sm font-bold mb-2" style={{color:C.orange, borderRight:`3px solid ${C.orange}`, paddingRight:'8px'}}>שימוש במערכת</p>
+          <div className="space-y-2">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">העברה למקרו - האם הנציג מעביר נכון למקרו המתאים?</label>
+              <input value={data.systemUsage.macro} onChange={e=>updateSystemUsage('macro', e.target.value)}
+                className="w-full border-0 border-b border-gray-200 px-1 py-1 text-sm focus:outline-none focus:border-b-2" style={{borderBottomColor:C.tealDark}} />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">צדדיות מול ספקים - איך הנציג מתנסח ומתנהל מול ספקים?</label>
+              <input value={data.systemUsage.vendorTone} onChange={e=>updateSystemUsage('vendorTone', e.target.value)}
+                className="w-full border-0 border-b border-gray-200 px-1 py-1 text-sm focus:outline-none focus:border-b-2" style={{borderBottomColor:C.tealDark}} />
+            </div>
+          </div>
+        </div>
+
+        {/* strengths / improvements / next steps */}
+        <div className="grid gap-3 mb-4" style={{gridTemplateColumns:'repeat(auto-fit, minmax(220px,1fr))'}}>
+          <div className="rounded-xl border-2 p-3" style={{borderColor:C.tealDark}}>
+            <p className="text-sm font-bold mb-2" style={{color:C.orange, borderRight:`3px solid ${C.orange}`, paddingRight:'8px'}}>נקודות לשימור</p>
+            {data.strengths.map((v, i) => (
+              <input key={i} value={v} onChange={e=>updateListItem('strengths', i, e.target.value)}
+                className="w-full border-0 border-b border-gray-200 px-1 py-1.5 text-sm mb-1 focus:outline-none focus:border-b-2" style={{borderBottomColor:C.tealDark}} />
+            ))}
+          </div>
+          <div className="rounded-xl border-2 p-3" style={{borderColor:C.tealDark}}>
+            <p className="text-sm font-bold mb-2" style={{color:C.orange, borderRight:`3px solid ${C.orange}`, paddingRight:'8px'}}>נקודות לשיפור</p>
+            {data.improvements.map((v, i) => (
+              <input key={i} value={v} onChange={e=>updateListItem('improvements', i, e.target.value)}
+                className="w-full border-0 border-b border-gray-200 px-1 py-1.5 text-sm mb-1 focus:outline-none focus:border-b-2" style={{borderBottomColor:C.tealDark}} />
+            ))}
+          </div>
+          <div className="rounded-xl border-2 p-3" style={{borderColor:C.tealDark}}>
+            <p className="text-sm font-bold mb-2" style={{color:C.orange, borderRight:`3px solid ${C.orange}`, paddingRight:'8px'}}>משימה / יעדים להמשך</p>
+            {data.nextSteps.map((v, i) => (
+              <input key={i} value={v} onChange={e=>updateListItem('nextSteps', i, e.target.value)}
+                className="w-full border-0 border-b border-gray-200 px-1 py-1.5 text-sm mb-1 focus:outline-none focus:border-b-2" style={{borderBottomColor:C.tealDark}} />
+            ))}
+          </div>
+        </div>
+
+        {/* summary bar */}
+        <div className="rounded-xl p-3 flex flex-wrap items-center gap-4" style={{background:C.tealLight}}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="text-xs font-semibold whitespace-nowrap" style={{color:C.tealDark}}>ציון עצמי של העובד:</label>
+            <div className="flex gap-1">
+              {['1','2','3','4','5'].map(val => (
+                <button key={val} onClick={()=>update('selfRating', val)}
+                  className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-colors"
+                  style={ data.selfRating===val
+                    ? {background:C.tealDark, borderColor:C.tealDark, color:'#fff'}
+                    : {background:'#fff', borderColor:'#cdeee5', color:C.tealDark} }>
+                  {val}
+                </button>
+              ))}
+            </div>
+            {data.selfRating && (
+              <span className="text-xs text-gray-500">
+                {{1:'חלש',2:'מתחת לממוצע',3:'ממוצע',4:'טוב',5:'מצוין'}[data.selfRating]}
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="text-xs font-semibold whitespace-nowrap" style={{color:C.tealDark}}>פגישת מעקב:</label>
+            <div className="flex gap-1 flex-wrap">
+              {['שבוע','שבועיים','3 שבועות','חודש'].map(opt => (
+                <button key={opt} onClick={()=>update('followUp', opt)}
+                  className="px-3 py-1 rounded-full text-xs font-medium border-2 transition-colors whitespace-nowrap"
+                  style={ data.followUp===opt
+                    ? {background:C.tealDark, borderColor:C.tealDark, color:'#fff'}
+                    : {background:'#fff', borderColor:'#cdeee5', color:C.tealDark} }>
+                  {opt}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-1 min-w-[160px]">
+            <label className="text-xs font-semibold whitespace-nowrap" style={{color:C.tealDark}}>שם המנהל:</label>
+            <input value={data.managerName} onChange={e=>update('managerName', e.target.value)}
+              className="border border-gray-200 rounded-lg px-2 py-1 text-sm bg-white flex-1" />
+          </div>
+        </div>
+
+        <p className="text-center text-xs text-gray-400 mt-3">הטופס נשמר אוטומטית. ניתן להוריד כ-PDF באמצעות הכפתור למעלה.</p>
+      </div>
+    </div>
+  );
+}
+
+
+function TargetsUpdateScreen({ targets, setTargets, wallaTargets, setWallaTargets }) {
+  const [board, setBoard] = useState('moked');
+  const isWalla = board === 'walla';
+
+  const updateField = (cat, field, value) => {
+    if(isWalla){
+      setWallaTargets(prev => ({
+        ...prev,
+        data: {
+          ...prev.data,
+          [cat]: { ...prev.data[cat], [field]: parseFloat(value) || 0 }
+        },
+        updatedAt: Date.now(),
+      }));
+      return;
+    }
+    setTargets(prev => ({
+      ...prev,
+      [board]: {
+        ...prev[board],
+        data: {
+          ...prev[board].data,
+          [cat]: { ...prev[board].data[cat], [field]: parseFloat(value) || 0 }
+        },
+        updatedAt: Date.now(),
+      }
+    }));
+  };
+
+  const activeBoard = isWalla ? wallaTargets : targets[board];
+  const activeCategories = isWalla ? ["% חורגות"] : TARGET_CATEGORIES;
+  const boardLabel = isWalla ? 'וואלה' : TEAM_LABELS[board];
+
+  const updatedLabel = activeBoard.updatedAt
+    ? new Date(activeBoard.updatedAt).toLocaleString('he-IL', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'})
+    : 'אין עדכון עדיין';
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-bold text-gray-800 mb-1">עדכון יעד מול ביצוע</h2>
+        <p className="text-sm text-gray-400">מילוי יומי - בחר את האזור הרלוונטי ועדכן את הנתונים מתחילת החודש ועד יום האתמול</p>
+      </div>
+
+      <div className="flex gap-2 flex-wrap">
+        {['moked','team1','team2','walla'].map(b => (
+          <button key={b} onClick={()=>setBoard(b)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium border ${board===b?'text-white':'text-gray-600 bg-white border-gray-200'}`}
+            style={board===b?{background:C.tealDark, borderColor:C.tealDark}:{}}>
+            {b==='walla' ? 'וואלה' : TEAM_LABELS[b]}
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-4 py-3 flex items-center justify-between" style={{background:C.tealDark}}>
+          <h3 className="font-bold text-white">{boardLabel} - עדכון נתונים</h3>
+          <span className="text-xs text-white/80">עודכן לאחרונה: {updatedLabel}</span>
+        </div>
+        <div className="p-4 space-y-3">
+          {activeCategories.map(cat => {
+            const row = activeBoard.data[cat];
+            const invert = cat === '% חורגות';
+            const pct = row.goal > 0 ? Math.round((invert ? (row.goal/Math.max(row.actual,0.0001)) : (row.actual/row.goal))*100) : 0;
+            const pctClamped = Math.max(0, Math.min(100, pct));
+            const color = pctClamped>=100 ? C.green : pctClamped>=85 ? C.teal : C.red;
+            return (
+              <div key={cat} className="flex flex-wrap items-center gap-3 p-3 rounded-xl" style={{background:C.tealLight}}>
+                <span className="w-40 text-sm font-semibold" style={{color:C.tealDark}}>{cat}</span>
+                <label className="text-xs text-gray-500">יעד</label>
+                <input type="number" value={row.goal} onChange={e=>updateField(cat,'goal',e.target.value)}
+                  className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-sm text-center bg-white" />
+                <label className="text-xs text-gray-500">ביצוע</label>
+                <input type="number" value={row.actual} onChange={e=>updateField(cat,'actual',e.target.value)}
+                  className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-sm text-center bg-white" />
+                <span className="text-sm font-bold px-2 py-1 rounded-lg bg-white" style={{color}}>{pctClamped}% עמידה</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   MORNING MANPOWER STATUS SCREEN (single, whole floor, due 09:00)
+============================================================ */
+function ManpowerStatusScreen({ manpower, setManpower, user }) {
+  const [photo, setPhoto] = useState(false);
+
+  const updateField = (field, value) => setManpower(prev => ({...prev, [field]: value, updatedAt: Date.now()}));
+  const updateBreakdown = (key, value) => setManpower(prev => ({...prev, breakdown: {...prev.breakdown, [key]: value}, updatedAt: Date.now()}));
+  const clearAll = () => setManpower(defaultManpowerStatus());
+
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString('he-IL', {hour:'2-digit', minute:'2-digit'});
+  const updatedLabel = manpower.updatedAt
+    ? new Date(manpower.updatedAt).toLocaleString('he-IL', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'})
+    : 'אין עדכון עדיין';
+
+  return (
+    <div className={photo ? 'photo-mode' : ''}>
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-4 ui-only">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800 mb-1">סטטוס כוח אדם - פתיחת משמרת</h2>
+          <p className="text-sm text-gray-400">מילוי חד-יומי, יש לשלוח עד השעה 9:00 בבוקר - עודכן לאחרונה: {updatedLabel}</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={clearAll} className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600">ניקוי</button>
+          <button onClick={()=>setPhoto(!photo)} className="px-4 py-2 rounded-lg text-sm font-medium text-white flex items-center gap-1" style={{background:C.tealDark}}>
+            <Icon name="camera" className="w-4 h-4" /> {photo ? 'חזרה לעריכה' : 'מצב צילום'}
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl p-5 shadow-sm" style={{boxShadow:'0 4px 18px rgba(0,0,0,0.06)'}}>
+        <div className="flex items-center justify-between border-b-2 pb-4 mb-4 flex-wrap gap-3" style={{borderColor:C.tealLight}}>
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold flex-shrink-0" style={{background:C.dark}}>
+            h<span style={{fontSize:'0.8em'}}>t</span><span style={{fontSize:'0.6em', position:'relative', top:'-4px'}}>z</span>
+          </div>
+          <div className="text-center flex-1">
+            <h2 className="text-lg font-bold text-gray-800">סטטוס כוח אדם - מוקד הייטקזון</h2>
+          </div>
+          <div className="w-11"></div>
+        </div>
+
+        <div className="rounded-lg text-white px-4 py-2 flex items-center justify-between flex-wrap gap-3 mb-4 font-semibold text-sm" style={{background:C.tealDark}}>
+          <span className="bg-white/15 rounded-lg px-3 py-1">ממלא: {user.name}</span>
+          <span className="bg-white rounded-lg px-4 py-1 text-lg font-bold" style={{color:C.dark}}>{timeStr}</span>
+          <span className="bg-white/15 rounded-lg px-3 py-1">פתיחת משמרת - עד 09:00</span>
+        </div>
+
+        <div className="mb-2">
+          <div className="rounded-t-lg px-4 py-2 font-semibold text-white text-sm" style={{background:C.tealDark}}>סטטוס כוח אדם</div>
+          <div className="rounded-b-lg p-3 grid gap-3" style={{background:C.tealLight, gridTemplateColumns:'repeat(auto-fit, minmax(120px,1fr))'}}>
+            <div className="bg-white rounded-lg p-2 text-center border" style={{borderColor:'#e0eee9'}}>
+              <label className="block text-xs text-gray-500 font-semibold mb-1">סה"כ חיפה</label>
+              <input value={manpower.haifa} onChange={e=>updateField('haifa', e.target.value)}
+                className="w-full text-center border border-gray-200 rounded-lg p-1 font-bold text-lg" placeholder="0" />
+            </div>
+            <div className="bg-white rounded-lg p-2 text-center border" style={{borderColor:'#e0eee9'}}>
+              <label className="block text-xs text-gray-500 font-semibold mb-1">סה"כ כפ"ס</label>
+              <input value={manpower.kfs} onChange={e=>updateField('kfs', e.target.value)}
+                className="w-full text-center border border-gray-200 rounded-lg p-1 font-bold text-lg" placeholder="0" />
+            </div>
+            <div className="bg-white rounded-lg p-2 text-center border" style={{borderColor:'#e0eee9'}}>
+              <label className="block text-xs text-gray-500 font-semibold mb-1">סה"כ כוח אדם</label>
+              <input value={manpower.total} onChange={e=>updateField('total', e.target.value)}
+                className="w-full text-center border border-gray-200 rounded-lg p-1 font-bold text-lg" placeholder="0" />
+            </div>
+          </div>
+        </div>
+
+        <div className="mb-2">
+          <div className="rounded-t-lg px-4 py-2 font-semibold text-white text-sm" style={{background:C.tealDark}}>חלוקה לתפקידים</div>
+          <div className="rounded-b-lg p-3 grid gap-3" style={{background:C.tealLight, gridTemplateColumns:'repeat(auto-fit, minmax(120px,1fr))'}}>
+            {ROLE_BREAKDOWN.map(k => (
+              <div key={k} className="bg-white rounded-lg p-2 text-center border" style={{borderColor:'#e0eee9'}}>
+                <label className="block text-xs text-gray-500 font-semibold mb-1">{k}</label>
+                <input value={manpower.breakdown[k]} onChange={e=>updateBreakdown(k, e.target.value)}
+                  className="w-full text-center border border-gray-200 rounded-lg p-1 font-bold text-lg" placeholder="0" />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <p className="text-center text-xs text-gray-400 mt-3">לצילום: Win+Shift+S או Cmd+Shift+4</p>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   HOURLY / SHIFT STATUS SCREEN (single, whole floor)
+============================================================ */
+function HourlyStatusScreen({ hourly, setHourly, user }) {
+  const [photo, setPhoto] = useState(false);
+
+  const updateQueue = (name, field, value) => {
+    setHourly(prev => ({...prev, queues: {...prev.queues, [name]: {...prev.queues[name], [field]: value}}, updatedAt: Date.now()}));
+  };
+  const updateDisplay = (name, field, value) => {
+    setHourly(prev => ({...prev, displays: {...prev.displays, [name]: {...prev.displays[name], [field]: value}}, updatedAt: Date.now()}));
+  };
+  const clearAll = () => setHourly(defaultHourlyStatus());
+
+  const pctAnswer = (q) => {
+    const inV = parseFloat(q.in)||0, ans = parseFloat(q.answered)||0;
+    return inV>0 ? Math.round((ans/inV)*100) : 0;
+  };
+
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString('he-IL', {hour:'2-digit', minute:'2-digit'});
+  const updatedLabel = hourly.updatedAt
+    ? new Date(hourly.updatedAt).toLocaleString('he-IL', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'})
+    : 'אין עדכון עדיין';
+
+  return (
+    <div className={photo ? 'photo-mode' : ''}>
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-4 ui-only">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800 mb-1">סטטוס שעתי</h2>
+          <p className="text-sm text-gray-400">תורים טלפוניים ותצוגות - כלל המוקד, מתעדכן כל שעתיים - עודכן לאחרונה: {updatedLabel}</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={clearAll} className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600">ניקוי</button>
+          <button onClick={()=>setPhoto(!photo)} className="px-4 py-2 rounded-lg text-sm font-medium text-white flex items-center gap-1" style={{background:C.tealDark}}>
+            <Icon name="camera" className="w-4 h-4" /> {photo ? 'חזרה לעריכה' : 'מצב צילום'}
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl p-5 shadow-sm" style={{boxShadow:'0 4px 18px rgba(0,0,0,0.06)'}}>
+        <div className="flex items-center justify-between border-b-2 pb-4 mb-4 flex-wrap gap-3" style={{borderColor:C.tealLight}}>
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold flex-shrink-0" style={{background:C.dark}}>
+            h<span style={{fontSize:'0.8em'}}>t</span><span style={{fontSize:'0.6em', position:'relative', top:'-4px'}}>z</span>
+          </div>
+          <div className="text-center flex-1">
+            <h2 className="text-lg font-bold text-gray-800">סטטוס שעתי - מוקד הייטקזון</h2>
+          </div>
+          <div className="w-11"></div>
+        </div>
+
+        <div className="rounded-lg text-white px-4 py-2 flex items-center justify-between flex-wrap gap-3 mb-4 font-semibold text-sm" style={{background:C.tealDark}}>
+          <span className="bg-white/15 rounded-lg px-3 py-1">ממלא: {user.name}</span>
+          <span className="bg-white rounded-lg px-4 py-1 text-lg font-bold" style={{color:C.dark}}>{timeStr}</span>
+          <span className="bg-white/15 rounded-lg px-3 py-1">סטטוס שעה</span>
+        </div>
+
+        {/* QUEUES + DISPLAYS side by side */}
+        <div className="grid gap-4 mb-2" style={{gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))'}}>
+          <div>
+            <div className="rounded-t-lg px-3 py-1.5 font-semibold text-white text-xs" style={{background:C.tealDark}}>תורים טלפוניים</div>
+            <div className="rounded-b-lg overflow-x-auto" style={{background:C.tealLight}}>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-500">
+                    <th className="px-2 py-1.5 text-right font-medium">שם תור</th>
+                    <th className="px-1 py-1.5 text-center font-medium">נכנסות</th>
+                    <th className="px-1 py-1.5 text-center font-medium">נענות</th>
+                    <th className="px-1 py-1.5 text-center font-medium">% מענה</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {QUEUE_NAMES.map(name => {
+                    const q = hourly.queues?.[name] || {in:'', answered:''};
+                    const pct = pctAnswer(q);
+                    const pctColor = pct >= 90 ? C.green : pct >= 75 ? C.orange : C.red;
+                    return (
+                      <tr key={name} className="border-t" style={{borderColor:'#cdeee5'}}>
+                        <td className="px-2 py-1 font-semibold text-gray-600 whitespace-nowrap">{name}</td>
+                        <td className="px-1 py-1"><input value={q.in} onChange={e=>updateQueue(name,'in',e.target.value)} placeholder="0" className="w-12 text-center border border-gray-200 rounded p-0.5 bg-white text-xs" /></td>
+                        <td className="px-1 py-1"><input value={q.answered} onChange={e=>updateQueue(name,'answered',e.target.value)} placeholder="0" className="w-12 text-center border border-gray-200 rounded p-0.5 bg-white text-xs" /></td>
+                        <td className="px-1 py-1 text-center font-bold" style={{color:pctColor}}>{pct}%</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <div className="rounded-t-lg px-3 py-1.5 font-semibold text-white text-xs" style={{background:C.tealDark}}>תצוגות</div>
+            <div className="rounded-b-lg overflow-x-auto" style={{background:C.tealLight}}>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-500">
+                    <th className="px-2 py-1.5 text-right font-medium">שם תצוגה</th>
+                    <th className="px-1 py-1.5 text-center font-medium">כמות</th>
+                    <th className="px-1 py-1.5 text-center font-medium">חולקו</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {DISPLAY_NAMES.map(name => {
+                    const d = hourly.displays?.[name] || {qty:'', distributed:''};
+                    return (
+                      <tr key={name} className="border-t" style={{borderColor:'#cdeee5'}}>
+                        <td className="px-2 py-1 font-semibold text-gray-600 whitespace-nowrap">{name}</td>
+                        <td className="px-1 py-1"><input value={d.qty} onChange={e=>updateDisplay(name,'qty',e.target.value)} placeholder="0" className="w-12 text-center border border-gray-200 rounded p-0.5 bg-white text-xs" /></td>
+                        <td className="px-1 py-1"><input value={d.distributed} onChange={e=>updateDisplay(name,'distributed',e.target.value)} placeholder="0" className="w-12 text-center border border-gray-200 rounded p-0.5 bg-white text-xs" /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* TZAKLA PROCEDURE */}
+        <div className="rounded-lg mt-4 overflow-hidden">
+          <div className="rounded-t-lg px-3 py-1.5 font-semibold text-white text-xs" style={{background:C.tealDark}}>נוהל צאקלה</div>
+          <div className="rounded-b-lg p-3" style={{background:C.tealLight}}>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold text-gray-600 min-w-fit">כמות פניות שאותרו:</label>
+                <input value={hourly.tzakla?.found || ''} onChange={e=>setHourly(prev=>({...prev, tzakla: {...prev.tzakla, found: e.target.value}, updatedAt: Date.now()}))} 
+                  placeholder="0" className="w-20 text-center border border-gray-200 rounded p-1 bg-white text-xs" />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold text-gray-600 min-w-fit">כמות פניות בטיפול:</label>
+                <input value={hourly.tzakla?.inProgress || ''} onChange={e=>setHourly(prev=>({...prev, tzakla: {...prev.tzakla, inProgress: e.target.value}, updatedAt: Date.now()}))} 
+                  placeholder="0" className="w-20 text-center border border-gray-200 rounded p-1 bg-white text-xs" />
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="checkbox" checked={hourly.tzakla?.reported || false} onChange={e=>setHourly(prev=>({...prev, tzakla: {...prev.tzakla, reported: e.target.checked}, updatedAt: Date.now()}))} 
+                  className="w-4 h-4 rounded border-gray-200" id="tzakla-reported" />
+                <label htmlFor="tzakla-reported" className="text-xs font-semibold text-gray-600">נשלח בתפוצה של כולם והועלה לקובץ</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <p className="text-center text-xs text-gray-400 mt-3">מתמלא אוטומטית = אפור &nbsp;|&nbsp; לצילום: Win+Shift+S או Cmd+Shift+4</p>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   DISPLAYS / LINKS SCREEN (shared, editable by everyone)
+============================================================ */
+function LinksScreen({ links, setLinks }) {
+  const [newName, setNewName] = useState('');
+  const [newUrl, setNewUrl] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editUrl, setEditUrl] = useState('');
+
+  const addLink = () => {
+    if(!newName.trim() || !newUrl.trim()) return;
+    setLinks(prev => [...prev, {id:'lnk-'+Date.now(), name:newName.trim(), url:newUrl.trim()}]);
+    setNewName(''); setNewUrl('');
+  };
+  const deleteLink = (id) => setLinks(prev => prev.filter(l => l.id !== id));
+  const startEdit = (link) => { setEditingId(link.id); setEditName(link.name); setEditUrl(link.url); };
+  const saveEdit = () => {
+    setLinks(prev => prev.map(l => l.id===editingId ? {...l, name:editName.trim(), url:editUrl.trim()} : l));
+    setEditingId(null);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-bold text-gray-800 mb-1">תצוגות</h2>
+        <p className="text-sm text-gray-400">קישורים לתצוגות חיות - חשוף לכל המשתמשים, ניתן להוספה ועריכה</p>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="divide-y divide-gray-50">
+          {links.map(link => (
+            <div key={link.id} className="flex items-center gap-3 px-4 py-3">
+              {editingId === link.id ? (
+                <>
+                  <input value={editName} onChange={e=>setEditName(e.target.value)} placeholder="שם התצוגה"
+                    className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                  <input value={editUrl} onChange={e=>setEditUrl(e.target.value)} placeholder="כתובת URL"
+                    className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                  <button onClick={saveEdit} className="px-3 py-1.5 rounded-lg text-white text-xs font-medium" style={{background:C.tealDark}}>שמירה</button>
+                </>
+              ) : (
+                <>
+                  <Icon name="link" className="w-4 h-4 flex-shrink-0" style={{color:C.tealDark}} />
+                  <a href={link.url} target="_blank" rel="noreferrer" className="flex-1 font-medium text-gray-700 hover:underline" style={{color:C.tealDark}}>
+                    {link.name}
+                  </a>
+                  <button onClick={()=>startEdit(link)} className="text-gray-300 hover:text-gray-500">
+                    <Icon name="edit" className="w-4 h-4" />
+                  </button>
+                  <button onClick={()=>deleteLink(link.id)} className="text-gray-300 hover:text-red-400">
+                    <Icon name="trash" className="w-4 h-4" />
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+          {links.length===0 && <p className="text-sm text-gray-400 py-6 text-center">אין תצוגות עדיין</p>}
+        </div>
+        <div className="p-4 border-t border-gray-100 flex flex-wrap gap-2">
+          <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="שם התצוגה"
+            className="flex-1 min-w-[140px] border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+          <input value={newUrl} onChange={e=>setNewUrl(e.target.value)} placeholder="כתובת URL"
+            className="flex-1 min-w-[140px] border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+          <button onClick={addLink} className="px-4 py-2 rounded-lg text-white text-sm font-medium flex items-center gap-1" style={{background:C.tealDark}}>
+            <Icon name="plus" className="w-4 h-4" /> הוספת תצוגה
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   LOGIN SCREEN (email-based identification)
+============================================================ */
+function LoginScreen({ onLogin }) {
+  const [email, setEmail] = useState('');
+  const [error, setError] = useState('');
+
+  const handleLogin = () => {
+    const match = USERS.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
+    if(!match){
+      setError('כתובת המייל לא נמצאה במערכת. פנה למנהל המערכת.');
+      return;
+    }
+    setError('');
+    onLogin(match.id);
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4" style={{background:'#F9FAFB'}}>
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 w-full max-w-sm text-center">
+        <div className="w-14 h-14 rounded-xl flex items-center justify-center text-white font-bold mx-auto mb-4" style={{background:C.dark}}>
+          h<span style={{fontSize:'0.8em'}}>t</span><span style={{fontSize:'0.6em', position:'relative', top:'-4px'}}>z</span>
+        </div>
+        <h2 className="text-lg font-bold text-gray-800 mb-1">מוקד הייטקזון</h2>
+        <p className="text-sm text-gray-400 mb-5">היכנס עם כתובת המייל הארגונית שלך</p>
+        <input
+          type="email"
+          value={email}
+          onChange={e=>{setEmail(e.target.value); setError('');}}
+          onKeyDown={e=>e.key==='Enter' && handleLogin()}
+          list="user-emails"
+          placeholder="name@htz.co.il"
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-center mb-3 focus:outline-none"
+        />
+        <datalist id="user-emails">
+          {USERS.map(u => <option key={u.id} value={u.email} />)}
+        </datalist>
+        {error && <p className="text-xs mb-3" style={{color:C.red}}>{error}</p>}
+        <button onClick={handleLogin} className="w-full px-4 py-2 rounded-lg text-white text-sm font-medium" style={{background:C.tealDark}}>
+          כניסה
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   PERMANENT REMINDER BANNER - "נוהל צ'אקלקצה" (mnmsh/achmsh)
+============================================================ */
+function ChaklaktzaBanner() {
+  return (
+    <div className="flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-white no-print" style={{background:C.orange}}>
+      <Icon name="bell" className="w-5 h-5 flex-shrink-0" />
+      <span>
+        <strong>נוהל צ'אקלקצה:</strong> יש לבצע בדיקה בכל בוקר, לעדכן את הפניות שנמצאו בקובץ ה-Sheets הנפרד שלכם, ולאחר מכן לדווח לכל הצוות.
+      </span>
+    </div>
+  );
+}
+
+/* ============================================================
+   MAIN APP
+============================================================ */
+function App() {
+  const persisted = loadState();
+  const [userId, setUserId] = useState(persisted?.userId || null);
+  const [current, setCurrent] = useState('dashboard');
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [tasks, setTasks] = useState(persisted?.tasks || TASKS_DEFAULT);
+  const [targets, setTargets] = useState(persisted?.targets || TARGETS_DEFAULT);
+  const [wallaTargets, setWallaTargets] = useState(persisted?.wallaTargets || WALLA_TARGETS_DEFAULT);
+  const [manpower, setManpower] = useState(persisted?.manpower || defaultManpowerStatus());
+  const [hourly, setHourly] = useState(persisted?.hourly || defaultHourlyStatus());
+  const [feedbackLog, setFeedbackLog] = useState(persisted?.feedbackLog || defaultFeedbackLog());
+  const [links, setLinks] = useState(persisted?.links || defaultLinks());
+
+  const user = USERS.find(u => u.id === userId);
+
+  useEffect(() => {
+    if(!user) return;
+    const allowed = {
+      mm: ['dashboard','checklist','feedback','manpower','hourly','links'],
+      mnhz: ['dashboard','checklist','feedback','links'],
+      mnmsh: ['dashboard','checklist','targets','manpower','hourly','links'],
+      admin: ['dashboard','checklist','feedback','targets','manpower','hourly','links'],
+    };
+    if(!allowed[user.roleKey].includes(current)) setCurrent('dashboard');
+  }, [userId]);
+
+  useEffect(() => {
+    const state = {userId, tasks, targets, wallaTargets, manpower, hourly, feedbackLog, links};
+    saveState(state);
+    if(user) syncToSheets(state, user.name);
+  }, [userId, tasks, targets, wallaTargets, manpower, hourly, feedbackLog, links]);
+
+  if(!user){
+    return <LoginScreen onLogin={(id)=>setUserId(id)} />;
+  }
+
+  const handleLogout = () => setUserId(null);
+
+
+  return (
+    <div className="flex min-h-screen" style={{background:'#F9FAFB'}}>
+      <Sidebar current={current} setCurrent={setCurrent} user={user} onLogout={handleLogout} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+      {mobileOpen && <div className="fixed inset-0 bg-black/30 z-30 lg:hidden no-print" onClick={()=>setMobileOpen(false)} />}
+      <div className="flex-1 min-w-0">
+        <div className="lg:hidden no-print flex items-center justify-between p-4 bg-white border-b border-gray-100 sticky top-0 z-20">
+          <div className="flex items-center gap-2">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center text-white font-bold text-sm" style={{background:C.dark}}>htz</div>
+            <span className="font-bold text-gray-800">מוקד הייטקזון</span>
+          </div>
+          <button onClick={()=>setMobileOpen(true)} className="p-2 rounded-lg border border-gray-200">
+            <Icon name="chevron" className="w-5 h-5 rotate-90" />
+          </button>
+        </div>
+        {user.roleKey === 'mnmsh' && <ChaklaktzaBanner />}
+        <main className="p-4 lg:p-8 max-w-6xl mx-auto">
+          {current==='dashboard' && <DashboardScreen user={user} targets={targets} wallaTargets={wallaTargets} />}
+          {current==='checklist' && <ChecklistScreen user={user} tasks={tasks} setTasks={setTasks} />}
+          {current==='feedback' && <FeedbackScreen feedbackLog={feedbackLog} setFeedbackLog={setFeedbackLog} user={user} />}
+          {current==='targets' && <TargetsUpdateScreen targets={targets} setTargets={setTargets} wallaTargets={wallaTargets} setWallaTargets={setWallaTargets} />}
+          {current==='manpower' && <ManpowerStatusScreen manpower={manpower} setManpower={setManpower} user={user} />}
+          {current==='hourly' && <HourlyStatusScreen hourly={hourly} setHourly={setHourly} user={user} />}
+          {current==='links' && <LinksScreen links={links} setLinks={setLinks} />}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
