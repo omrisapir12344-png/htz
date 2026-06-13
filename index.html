@@ -1657,11 +1657,12 @@ function App() {
 
   const user = USERS.find(u => u.id === userId);
 
-  // Load latest state from Google Sheets on mount
+  // Load latest state from Google Sheets whenever user changes (on login)
   useEffect(() => {
+    if(!userId) return; // Don't load if not logged in
+    console.log('👤 User logged in, loading latest data from Sheets...');
     loadStateFromSheets().then(sheetState => {
       if(sheetState) {
-        if(sheetState.userId) setUserId(sheetState.userId);
         if(sheetState.tasks) setTasks(sheetState.tasks);
         if(sheetState.targets) setTargets(sheetState.targets);
         if(sheetState.wallaTargets) setWallaTargets(sheetState.wallaTargets);
@@ -1669,9 +1670,11 @@ function App() {
         if(sheetState.hourly) setHourly(sheetState.hourly);
         if(sheetState.feedbackLog) setFeedbackLog(sheetState.feedbackLog);
         if(sheetState.links) setLinks(sheetState.links);
+        console.log('✅ All data loaded from Sheets on login');
       }
     });
-  }, []);
+  }, [userId]);
+
 
   useEffect(() => {
     if(!user) return;
