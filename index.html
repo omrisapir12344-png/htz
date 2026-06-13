@@ -64,12 +64,34 @@ function saveState(state){
   catch(e){ console.error(e); }
 }
 
+/* Load state from Google Sheets (fetch latest data) */
+async function loadStateFromSheets(){
+  if(!SHEETS_SYNC_URL) return null;
+  try {
+    console.log('Loading state from Sheets...');
+    const resp = await fetch(SHEETS_SYNC_URL, {mode:'cors'});
+    const data = await resp.json();
+    console.log('Sheets response:', data);
+    if(data.ok && data.state) {
+      // Found state in Sheets - merge it with localStorage
+      const localState = loadState() || {};
+      const mergedState = {...localState, ...data.state};
+      console.log('Merged state from Sheets:', mergedState);
+      saveState(mergedState);
+      return mergedState;
+    }
+  } catch(e) { 
+    console.warn('Could not load from Sheets, using localStorage:', e);
+  }
+  return null;
+}
+
 /* ============================================================
    GOOGLE SHEETS SYNC (one-way: site -> sheet, backup only)
    Paste the Apps Script "Web app URL" here once deployed.
    Leave empty to disable sync (app works normally without it).
 ============================================================ */
-const SHEETS_SYNC_URL = 'https://script.google.com/macros/s/AKfycbzYvEny6Jq5H4HsWZYRZSokGCNOgssNx5Jq59r8CCj7tzXsgS_Du17vTXsLUzOxG8RC/exec';
+const SHEETS_SYNC_URL = 'https://script.google.com/macros/s/AKfycbynHu2iuZxE23MNnnGIXDAp0RQUgRJxZz0mc-t-zUeomF1FoQQpoG4geNFx2ktyd636/exec';
 
 let _syncTimer = null;
 function syncToSheets(state, updatedBy){
@@ -1619,6 +1641,22 @@ function App() {
 
   const user = USERS.find(u => u.id === userId);
 
+  // Load latest state from Google Sheets on mount
+  useEffect(() => {
+    loadStateFromSheets().then(sheetState => {
+      if(sheetState) {
+        if(sheetState.userId) setUserId(sheetState.userId);
+        if(sheetState.tasks) setTasks(sheetState.tasks);
+        if(sheetState.targets) setTargets(sheetState.targets);
+        if(sheetState.wallaTargets) setWallaTargets(sheetState.wallaTargets);
+        if(sheetState.manpower) setManpower(sheetState.manpower);
+        if(sheetState.hourly) setHourly(sheetState.hourly);
+        if(sheetState.feedbackLog) setFeedbackLog(sheetState.feedbackLog);
+        if(sheetState.links) setLinks(sheetState.links);
+      }
+    });
+  }, []);
+
   useEffect(() => {
     if(!user) return;
     const allowed = {
@@ -1635,6 +1673,7 @@ function App() {
     saveState(state);
     if(user) syncToSheets(state, user.name);
   }, [userId, tasks, targets, wallaTargets, manpower, hourly, feedbackLog, links]);
+
 
   if(!user){
     return <LoginScreen onLogin={(id)=>setUserId(id)} />;
